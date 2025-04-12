@@ -1,41 +1,46 @@
 #!/usr/bin/env python3
-import csv
+
 import re
 import sys
 import subprocess
 import uuid
 import argparse
 
+
 def parse_arguments():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='Execute ClickHouse query with profiling and generate an enriched DOT graph.')
-    parser.add_argument('sql_query', help='SQL query to execute and profile')
+    """
+    Parse command line arguments.
+    """
+    parser = argparse.ArgumentParser(description='Execute ClickHouse query with profiling and generate an enriched DOT graph. Distributed queries are not really supported.')
+    parser.add_argument('sql_query', help='SQL query to profile')
     parser.add_argument('--host', default='localhost', help='ClickHouse server host (default: localhost)')
     parser.add_argument('--secure', action='store_true', help='Use secure connection to ClickHouse')
     parser.add_argument('--password', default='', help='ClickHouse server password (default: empty)')
-    parser.add_argument('--cluster', help='ClickHouse cluster name for distributed operations')
-    
+    parser.add_argument('--cluster', help='ClickHouse cluster name')
+
     return parser.parse_args()
+
 
 def get_clickhouse_base_command(args):
     """
     Build the base ClickHouse command with connection parameters.
-    
+
     Args:
         args: Parsed command line arguments
-        
+
     Returns:
         List of base command parameters
     """
     cmd = ['clickhouse-client', '--host', args.host]
-    
+
     if args.secure:
         cmd.append('--secure')
-        
+
     if args.password:
         cmd.extend(['--password', args.password])
-        
+
     return cmd
+
 
 def get_dot_graph_from_query(query, args):
     """
@@ -51,7 +56,7 @@ def get_dot_graph_from_query(query, args):
     try:
         # Get base command with connection parameters
         clickhouse_cmd = get_clickhouse_base_command(args)
-        
+
         # Add explain command
         clickhouse_cmd.extend([
             '-q',
@@ -63,6 +68,7 @@ def get_dot_graph_from_query(query, args):
 
         # Return the DOT graph from stdout
         return result.stdout.strip()
+
     except subprocess.CalledProcessError as e:
         print(f"Error executing EXPLAIN command: {e}", file=sys.stderr)
         print(f"Error output: {e.stderr}", file=sys.stderr)
@@ -70,6 +76,7 @@ def get_dot_graph_from_query(query, args):
     except Exception as e:
         print(f"Unexpected error: {e}", file=sys.stderr)
         sys.exit(1)
+
 
 def execute_query_with_profiling(query, query_id, args):
     """
@@ -83,7 +90,7 @@ def execute_query_with_profiling(query, query_id, args):
     try:
         # Get base command with connection parameters
         clickhouse_cmd = get_clickhouse_base_command(args)
-        
+
         # Add profiling parameters and query
         clickhouse_cmd.extend([
             '--log_processors_profiles', '1',
@@ -94,9 +101,9 @@ def execute_query_with_profiling(query, query_id, args):
         ])
 
         # Execute the command and capture output
-        result = subprocess.run(clickhouse_cmd, capture_output=True, text=True, check=True)
+        subprocess.run(clickhouse_cmd, capture_output=True, text=True, check=True)
 
-        print(f"Query executed successfully with no output (using Null format)", file=sys.stderr)
+        print("Query executed successfully with no output (using Null format)", file=sys.stderr)
 
     except subprocess.CalledProcessError as e:
         print(f"Error executing query: {e}", file=sys.stderr)
@@ -105,6 +112,7 @@ def execute_query_with_profiling(query, query_id, args):
     except Exception as e:
         print(f"Unexpected error: {e}", file=sys.stderr)
         sys.exit(1)
+
 
 def get_profile_data(query_id, args):
     """
@@ -120,13 +128,13 @@ def get_profile_data(query_id, args):
     try:
         # Get base command with connection parameters
         clickhouse_cmd = get_clickhouse_base_command(args)
-        
+
         # Determine which table to query based on cluster argument
         if args.cluster:
             table_reference = f"clusterAllReplicas('{args.cluster}', system.processors_profile_log)"
         else:
             table_reference = "system.processors_profile_log"
-        
+
         # Query the appropriate table for the specific query_id
         profile_query = f"""
         SELECT
@@ -149,6 +157,7 @@ def get_profile_data(query_id, args):
 
         # Return the CSV data from stdout
         return result.stdout.strip()
+
     except subprocess.CalledProcessError as e:
         print(f"Error retrieving profile data: {e}", file=sys.stderr)
         print(f"Error output: {e.stderr}", file=sys.stderr)
@@ -157,8 +166,11 @@ def get_profile_data(query_id, args):
         print(f"Unexpected error: {e}", file=sys.stderr)
         sys.exit(1)
 
+
 def read_csv_data(csv_content):
-    """Read the CSV data and organize it by processor_id."""
+    """
+    Read the CSV data and organize it by processor_id.
+    """
     result = {}
 
     # Split content into lines
@@ -186,6 +198,7 @@ def read_csv_data(csv_content):
             result[processor_id] = {"step_id": step_id, "elapsed_us": elapsed_us}
 
     return result
+
 
 def enrich_dot_graph(dot_content, csv_content):
     """
@@ -222,6 +235,7 @@ def enrich_dot_graph(dot_content, csv_content):
 
     return enriched_dot
 
+
 def main():
     # Parse command line arguments
     args = parse_arguments()
@@ -243,15 +257,15 @@ def main():
     try:
         # Get base command with connection parameters
         flush_cmd = get_clickhouse_base_command(args)
-        
+
         # Determine flush logs command based on cluster parameter
         if args.cluster:
             flush_query = f"SYSTEM FLUSH LOGS ON CLUSTER '{args.cluster}'"
         else:
             flush_query = "SYSTEM FLUSH LOGS"
-            
+
         flush_cmd.extend(['-q', flush_query])
-        
+
         subprocess.run(flush_cmd, check=True, capture_output=True)
     except Exception as e:
         print(f"Warning: Could not flush logs: {e}", file=sys.stderr)
@@ -265,7 +279,8 @@ def main():
     enriched_dot = enrich_dot_graph(dot_content, csv_content)
 
     # Print the final result to stdout (not stderr)
-    print(enriched_dot)
+    print('\n' + enriched_dot)
+
 
 if __name__ == "__main__":
     main()
