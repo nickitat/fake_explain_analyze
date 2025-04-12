@@ -13,6 +13,7 @@ def parse_arguments():
     parser.add_argument('--host', default='localhost', help='ClickHouse server host (default: localhost)')
     parser.add_argument('--secure', action='store_true', help='Use secure connection to ClickHouse')
     parser.add_argument('--password', default='', help='ClickHouse server password (default: empty)')
+    parser.add_argument('--cluster', help='ClickHouse cluster name for distributed operations')
     
     return parser.parse_args()
 
@@ -50,7 +51,7 @@ def get_dot_graph_from_query(query, args):
     try:
         # Get base command with connection parameters
         clickhouse_cmd = get_clickhouse_base_command(args)
-
+        
         # Add explain command
         clickhouse_cmd.extend([
             '-q',
@@ -120,13 +121,19 @@ def get_profile_data(query_id, args):
         # Get base command with connection parameters
         clickhouse_cmd = get_clickhouse_base_command(args)
         
-        # Query the system.processors_profile_log table for the specific query_id
+        # Determine which table to query based on cluster argument
+        if args.cluster:
+            table_reference = f"clusterAllReplicas('{args.cluster}', system.processors_profile_log)"
+        else:
+            table_reference = "system.processors_profile_log"
+        
+        # Query the appropriate table for the specific query_id
         profile_query = f"""
         SELECT
             toString(step_uniq_id) AS "step_id",
             toString(processor_uniq_id) AS "processor_id",
             elapsed_us
-        FROM system.processors_profile_log
+        FROM {table_reference}
         WHERE query_id = '{query_id}'
         FORMAT CSVWithNames
         """
@@ -236,7 +243,14 @@ def main():
     try:
         # Get base command with connection parameters
         flush_cmd = get_clickhouse_base_command(args)
-        flush_cmd.extend(['-q', 'SYSTEM FLUSH LOGS'])
+        
+        # Determine flush logs command based on cluster parameter
+        if args.cluster:
+            flush_query = f"SYSTEM FLUSH LOGS ON CLUSTER '{args.cluster}'"
+        else:
+            flush_query = "SYSTEM FLUSH LOGS"
+            
+        flush_cmd.extend(['-q', flush_query])
         
         subprocess.run(flush_cmd, check=True, capture_output=True)
     except Exception as e:
