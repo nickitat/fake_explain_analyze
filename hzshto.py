@@ -201,41 +201,47 @@ def read_tsv_data(tsv_content):
 
     # Get header indices - handle both quoted and unquoted headers
     header = lines[0].split("\t")
-    
+
     # Try to find the column indices, handling different possible formats
     step_id_idx = -1
     processor_id_idx = -1
     elapsed_us_idx = -1
-    
+
     for i, column in enumerate(header):
         # Remove quotes if present
-        clean_column = column.replace("\"", "")
-        
+        clean_column = column.replace('"', "")
+
         if clean_column == "step_id":
             step_id_idx = i
         elif clean_column == "processor_id":
             processor_id_idx = i
         elif clean_column == "elapsed_us":
             elapsed_us_idx = i
-    
+
     # Check if we found all required columns
     if step_id_idx == -1 or processor_id_idx == -1 or elapsed_us_idx == -1:
-        print(f"Warning: Could not find all required columns in TSV header: {header}", file=sys.stderr)
+        print(
+            f"Warning: Could not find all required columns in TSV header: {header}",
+            file=sys.stderr,
+        )
         return result
 
     # Process data rows
     for i in range(1, len(lines)):
         row = lines[i].split("\t")
-        
+
         # Skip rows that don't have enough columns
         if len(row) <= max(step_id_idx, processor_id_idx, elapsed_us_idx):
-            print(f"Warning: Skipping row with insufficient columns: {row}", file=sys.stderr)
+            print(
+                f"Warning: Skipping row with insufficient columns: {row}",
+                file=sys.stderr,
+            )
             continue
-        
+
         # Remove all quotes from the values
-        step_id = row[step_id_idx].replace("\"", "")
-        processor_id = row[processor_id_idx].replace("\"", "")
-        elapsed_us = row[elapsed_us_idx].replace("\"", "")
+        step_id = row[step_id_idx].replace('"', "")
+        processor_id = row[processor_id_idx].replace('"', "")
+        elapsed_us = row[elapsed_us_idx].replace('"', "")
 
         if processor_id not in result:
             result[processor_id] = {"step_id": step_id, "elapsed_us": elapsed_us}
@@ -256,7 +262,7 @@ def enrich_dot_graph(dot_content, tsv_content):
 
     def replace_label(match):
         node_prefix = match.group(1)  # n0[label="
-        label = match.group(2)        # The processor name (with complex chars)
+        label = match.group(2)  # The processor name (with complex chars)
         node_suffix = match.group(3)  # "];
 
         # Check if we have data for this node
@@ -271,9 +277,12 @@ def enrich_dot_graph(dot_content, tsv_content):
                 new_label = f"{label}\\nStep: {step_id}\\nElapsed: {elapsed_ms:.2f} ms"
             except ValueError:
                 # In case of conversion error, use the original elapsed_us value
-                print(f"Warning: Could not convert elapsed_us to int: {data['elapsed_us']}", file=sys.stderr)
+                print(
+                    f"Warning: Could not convert elapsed_us to int: {data['elapsed_us']}",
+                    file=sys.stderr,
+                )
                 new_label = f"{label}\\nStep: {step_id}\\nElapsed: {data['elapsed_us']}"
-                
+
             return f"{node_prefix}{new_label}{node_suffix}"
 
         # If no data, return unchanged
