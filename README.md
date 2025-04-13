@@ -1,3 +1,5 @@
+### Usage
+
 ``` sh
 ❯ ./explain.py --help
 usage: explain.py [-h] [--host HOST] [--secure] [--password PASSWORD] [--cluster CLUSTER] sql_query
@@ -15,3 +17,14 @@ options:
   --cluster CLUSTER    ClickHouse cluster name
 ```
 
+### Example
+
+Command:
+
+``` sh
+./explain.py 'select * from numbers_mt(1e6) t1 join numbers_mt(1e5) t2 using(number) settings max_threads=4'
+```
+
+Output:
+
+![graphviz-3](https://github.com/user-attachments/assets/ae557668-a5ae-45d6-9ff0-e6e0014cab03)
