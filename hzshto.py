@@ -140,7 +140,7 @@ def get_profile_data(query_id, args):
         args: Parsed command line arguments
 
     Returns:
-        CSV profiling data as a string
+        TSV profiling data as a string
     """
     try:
         # Get base command with connection parameters
@@ -162,7 +162,7 @@ def get_profile_data(query_id, args):
             elapsed_us
         FROM {table_reference}
         WHERE query_id = '{query_id}'
-        FORMAT CSVWithNames
+        FORMAT TSVWithNames
         """
 
         # Add query parameter
@@ -173,7 +173,7 @@ def get_profile_data(query_id, args):
             clickhouse_cmd, capture_output=True, text=True, check=True
         )
 
-        # Return the CSV data from stdout
+        # Return the TSV data from stdout
         return result.stdout.strip()
 
     except subprocess.CalledProcessError as e:
@@ -185,32 +185,57 @@ def get_profile_data(query_id, args):
         sys.exit(1)
 
 
-def read_csv_data(csv_content):
+def read_tsv_data(tsv_content):
     """
-    Read the CSV data and organize it by processor_id.
+    Read the TSV data and organize it by processor_id.
     """
     result = {}
 
     # Split content into lines
-    lines = csv_content.strip().split("\n")
+    lines = tsv_content.strip().split("\n")
 
     # Make sure there's data to process
     if not lines or len(lines) < 2:  # Need at least header and one data row
         print("Warning: No profile data found", file=sys.stderr)
         return result
 
-    # Get header indices
-    header = lines[0].split(",")
-    step_id_idx = header.index('"step_id"')
-    processor_id_idx = header.index('"processor_id"')
-    elapsed_us_idx = header.index('"elapsed_us"')
+    # Get header indices - handle both quoted and unquoted headers
+    header = lines[0].split("\t")
+    
+    # Try to find the column indices, handling different possible formats
+    step_id_idx = -1
+    processor_id_idx = -1
+    elapsed_us_idx = -1
+    
+    for i, column in enumerate(header):
+        # Remove quotes if present
+        clean_column = column.replace("\"", "")
+        
+        if clean_column == "step_id":
+            step_id_idx = i
+        elif clean_column == "processor_id":
+            processor_id_idx = i
+        elif clean_column == "elapsed_us":
+            elapsed_us_idx = i
+    
+    # Check if we found all required columns
+    if step_id_idx == -1 or processor_id_idx == -1 or elapsed_us_idx == -1:
+        print(f"Warning: Could not find all required columns in TSV header: {header}", file=sys.stderr)
+        return result
 
     # Process data rows
     for i in range(1, len(lines)):
-        row = lines[i].split(",")
-        step_id = row[step_id_idx].strip('"')
-        processor_id = row[processor_id_idx].strip('"')
-        elapsed_us = row[elapsed_us_idx]
+        row = lines[i].split("\t")
+        
+        # Skip rows that don't have enough columns
+        if len(row) <= max(step_id_idx, processor_id_idx, elapsed_us_idx):
+            print(f"Warning: Skipping row with insufficient columns: {row}", file=sys.stderr)
+            continue
+        
+        # Remove all quotes from the values
+        step_id = row[step_id_idx].replace("\"", "")
+        processor_id = row[processor_id_idx].replace("\"", "")
+        elapsed_us = row[elapsed_us_idx].replace("\"", "")
 
         if processor_id not in result:
             result[processor_id] = {"step_id": step_id, "elapsed_us": elapsed_us}
@@ -218,31 +243,37 @@ def read_csv_data(csv_content):
     return result
 
 
-def enrich_dot_graph(dot_content, csv_content):
+def enrich_dot_graph(dot_content, tsv_content):
     """
-    Enrich the DOT graph with information from the CSV by modifying
+    Enrich the DOT graph with information from the TSV by modifying
     node labels in place and preserving all other parts of the graph.
     """
-    csv_data = read_csv_data(csv_content)
+    tsv_data = read_tsv_data(tsv_content)
 
     # Create a pattern to find node labels in the dot file
     # This pattern captures the entire node definition line
-    node_pattern = r'(n\d+\[label=")([^"]+)(".*?\];)'
+    node_pattern = r'(n\d+\[label=")(.*?)(".*?\];)'
 
     def replace_label(match):
         node_prefix = match.group(1)  # n0[label="
-        label = match.group(2)        # NumbersRange_0
+        label = match.group(2)        # The processor name (with complex chars)
         node_suffix = match.group(3)  # "];
 
         # Check if we have data for this node
-        if label in csv_data:
-            data = csv_data[label]
+        if label in tsv_data:
+            data = tsv_data[label]
             step_id = data["step_id"]
-            elapsed_us = int(data["elapsed_us"])
-            elapsed_ms = elapsed_us / 1000  # Convert microseconds to milliseconds
-
-            # Create new enriched label with milliseconds
-            new_label = f"{label}\\nStep: {step_id}\\nElapsed: {elapsed_ms:.2f} ms"
+            # Ensure elapsed_us is a clean integer value
+            try:
+                elapsed_us = int(data["elapsed_us"])
+                elapsed_ms = elapsed_us / 1000  # Convert microseconds to milliseconds
+                # Create new enriched label with milliseconds
+                new_label = f"{label}\\nStep: {step_id}\\nElapsed: {elapsed_ms:.2f} ms"
+            except ValueError:
+                # In case of conversion error, use the original elapsed_us value
+                print(f"Warning: Could not convert elapsed_us to int: {data['elapsed_us']}", file=sys.stderr)
+                new_label = f"{label}\\nStep: {step_id}\\nElapsed: {data['elapsed_us']}"
+                
             return f"{node_prefix}{new_label}{node_suffix}"
 
         # If no data, return unchanged
@@ -290,11 +321,11 @@ def main():
 
     # STEP 5: Fetch profile data from system.processors_profile_log
     print("Retrieving profiling data...", file=sys.stderr)
-    csv_content = get_profile_data(query_id, args)
+    tsv_content = get_profile_data(query_id, args)
 
     # STEP 6: Process and print enriched DOT graph to stdout
     print("Enriching DOT graph with profiling data...", file=sys.stderr)
-    enriched_dot = enrich_dot_graph(dot_content, csv_content)
+    enriched_dot = enrich_dot_graph(dot_content, tsv_content)
 
     # Print the final result to stdout (not stderr)
     print("\n" + enriched_dot)
