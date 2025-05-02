@@ -22,7 +22,7 @@ options:
 Command:
 
 ``` sh
-./explain.py 'select * from numbers_mt(1e6) t1 join numbers_mt(1e5) t2 using(number) settings max_threads=4'
+./explain.py 'with t as (select CounterID, WatchID from hits_s3 WHERE CounterID < 8888 and WatchID > 30001) select WatchID, sum(CounterID) from hits_s3 lhs inner join t rhs using (WatchID) group by WatchID settings max_threads=8' | dot -T svg > query_heatmap.svg
 ```
 
 Output:
