@@ -12,7 +12,7 @@ def parse_arguments():
     Parse command line arguments.
     """
     parser = argparse.ArgumentParser(
-        description="Execute ClickHouse query with profiling and generate an enriched DOT graph. Distributed queries are not really supported."
+        description="Execute ClickHouse query with profiling and generate an enriched DOT graph with heatmap coloring. Distributed queries are not really supported."
     )
     parser.add_argument("sql_query", help="SQL query to profile")
     parser.add_argument(
@@ -188,8 +188,11 @@ def get_profile_data(query_id, args):
 def read_tsv_data(tsv_content):
     """
     Read the TSV data and organize it by processor_id.
+    Also calculate min and max elapsed time for heatmap coloring.
     """
     result = {}
+    max_elapsed_us = 0
+    min_elapsed_us = float("inf")
 
     # Split content into lines
     lines = tsv_content.strip().split("\n")
@@ -197,7 +200,7 @@ def read_tsv_data(tsv_content):
     # Make sure there's data to process
     if not lines or len(lines) < 2:  # Need at least header and one data row
         print("Warning: No profile data found", file=sys.stderr)
-        return result
+        return result, min_elapsed_us, max_elapsed_us
 
     # Get header indices - handle both quoted and unquoted headers
     header = lines[0].split("\t")
@@ -224,7 +227,7 @@ def read_tsv_data(tsv_content):
             f"Warning: Could not find all required columns in TSV header: {header}",
             file=sys.stderr,
         )
-        return result
+        return result, min_elapsed_us, max_elapsed_us
 
     # Process data rows
     for i in range(1, len(lines)):
@@ -243,22 +246,86 @@ def read_tsv_data(tsv_content):
         processor_id = row[processor_id_idx].replace('"', "")
         elapsed_us = row[elapsed_us_idx].replace('"', "")
 
-        if processor_id not in result:
-            result[processor_id] = {"step_id": step_id, "elapsed_us": elapsed_us}
+        # Convert elapsed_us to a numeric value
+        try:
+            elapsed_us_value = int(elapsed_us)
 
-    return result
+            # Update min and max values for scaling
+            if elapsed_us_value > max_elapsed_us:
+                max_elapsed_us = elapsed_us_value
+            if elapsed_us_value < min_elapsed_us:
+                min_elapsed_us = elapsed_us_value
+
+            # Store the data
+            if processor_id not in result:
+                result[processor_id] = {
+                    "step_id": step_id,
+                    "elapsed_us": elapsed_us_value,
+                }
+
+        except ValueError:
+            print(
+                f"Warning: Could not convert elapsed_us to int: {elapsed_us}",
+                file=sys.stderr,
+            )
+            if processor_id not in result:
+                result[processor_id] = {"step_id": step_id, "elapsed_us": elapsed_us}
+
+    # If no data was processed, set min to 0
+    if min_elapsed_us == float("inf"):
+        min_elapsed_us = 0
+
+    return result, min_elapsed_us, max_elapsed_us
+
+
+def get_heatmap_color(elapsed_us, min_elapsed_us, max_elapsed_us):
+    """
+    Generate a color ranging from white to red based on the elapsed time.
+
+    Args:
+        elapsed_us: The time in microseconds
+        min_elapsed_us: Minimum time across all processors
+        max_elapsed_us: Maximum time across all processors
+
+    Returns:
+        A hex color string (e.g., "#FFFFFF" for white, "#FF0000" for red)
+    """
+    # Prevent division by zero if all processors took the same time
+    range_elapsed = max_elapsed_us - min_elapsed_us
+    if range_elapsed == 0:
+        normalized = 0.5  # Default to mid-range if all times are the same
+    else:
+        # Normalize the value between 0 and 1
+        normalized = (elapsed_us - min_elapsed_us) / range_elapsed
+
+    # Convert to a color from white (#FFFFFF) to red (#FF0000)
+    # Green component goes from FF to 00
+    # Blue component goes from FF to 00
+    green_blue = int(255 * (1 - normalized))
+
+    # Format as hex color
+    color = f'"#FF{green_blue:02X}{green_blue:02X}"'
+
+    return color
 
 
 def enrich_dot_graph(dot_content, tsv_content):
     """
     Enrich the DOT graph with information from the TSV by modifying
-    node labels in place and preserving all other parts of the graph.
+    node labels in place and adding heatmap coloring based on elapsed time.
     """
-    tsv_data = read_tsv_data(tsv_content)
+    # Get profile data and min/max times for scaling the heatmap
+    tsv_data, min_elapsed_us, max_elapsed_us = read_tsv_data(tsv_content)
 
-    # Create a pattern to find node labels in the dot file
-    # This pattern captures the entire node definition line
-    node_pattern = r'(n\d+\[label=")(.*?)(".*?\];)'
+    print(
+        f"Time range for heatmap: {min_elapsed_us/1000:.2f} - {max_elapsed_us/1000:.2f} ms",
+        file=sys.stderr,
+    )
+
+    # Create a pattern to find node definitions in the dot file
+    # This pattern captures the entire node definition line more precisely
+    # It captures: (1) node id and label start, (2) the processor name, (3) the rest until the semicolon
+    node_pattern = r'(n\d+\s*\[\s*label\s*=\s*")(.*?)("\s*\]\s*;)'
 
     def replace_label(match):
         node_prefix = match.group(1)  # n0[label="
@@ -269,12 +336,38 @@ def enrich_dot_graph(dot_content, tsv_content):
         if label in tsv_data:
             data = tsv_data[label]
             step_id = data["step_id"]
-            # Ensure elapsed_us is a clean integer value
+
+            # Process elapsed time
             try:
-                elapsed_us = int(data["elapsed_us"])
+                # If already converted to int in read_tsv_data
+                if isinstance(data["elapsed_us"], int):
+                    elapsed_us = data["elapsed_us"]
+                else:
+                    # Otherwise convert it now
+                    elapsed_us = int(data["elapsed_us"])
+
                 elapsed_ms = elapsed_us / 1000  # Convert microseconds to milliseconds
+
+                # Get color based on elapsed time
+                color = get_heatmap_color(elapsed_us, min_elapsed_us, max_elapsed_us)
+
                 # Create new enriched label with milliseconds
                 new_label = f"{label}\\nStep: {step_id}\\nElapsed: {elapsed_ms:.2f} ms"
+
+                # Add color styling to the node
+                # We need to carefully preserve the existing attributes while adding our color ones
+                # Replace the ending quotes and add color attributes before the closing bracket
+                # The original suffix is like "]; - we need to modify it without breaking the syntax
+
+                # The original suffix is typically in the form: "];
+                # We need to replace it entirely without adding an extra "];
+                # Instead of trying to preserve existing attributes, we'll replace the entire suffix
+
+                # Create the new suffix with color attributes
+                node_suffix_with_color = f'", fillcolor={color}, style="filled"];'
+
+                return f"{node_prefix}{new_label}{node_suffix_with_color}"
+
             except ValueError:
                 # In case of conversion error, use the original elapsed_us value
                 print(
@@ -282,13 +375,24 @@ def enrich_dot_graph(dot_content, tsv_content):
                     file=sys.stderr,
                 )
                 new_label = f"{label}\\nStep: {step_id}\\nElapsed: {data['elapsed_us']}"
-
-            return f"{node_prefix}{new_label}{node_suffix}"
+                return f"{node_prefix}{new_label}{node_suffix}"
 
         # If no data, return unchanged
         return match.group(0)
 
-    # Replace all node labels with enriched versions
+    # Modify the DOT graph header to ensure it supports node colors
+    # We need to be careful with the DOT syntax - add the attributes in the correct location
+    # Different ClickHouse versions might output slightly different DOT formats, so handle both common patterns
+    if "digraph {" in dot_content and not "bgcolor" in dot_content:
+        dot_content = dot_content.replace(
+            "digraph {", 'digraph {\n  graph [bgcolor="transparent"];'
+        )
+    elif "digraph G {" in dot_content and not "bgcolor" in dot_content:
+        dot_content = dot_content.replace(
+            "digraph G {", 'digraph G {\n  graph [bgcolor="transparent"];'
+        )
+
+    # Replace all node labels with enriched versions including colors
     enriched_dot = re.sub(node_pattern, replace_label, dot_content)
 
     return enriched_dot
@@ -333,7 +437,10 @@ def main():
     tsv_content = get_profile_data(query_id, args)
 
     # STEP 6: Process and print enriched DOT graph to stdout
-    print("Enriching DOT graph with profiling data...", file=sys.stderr)
+    print(
+        "Enriching DOT graph with profiling data and generating heatmap...",
+        file=sys.stderr,
+    )
     enriched_dot = enrich_dot_graph(dot_content, tsv_content)
 
     # Print the final result to stdout (not stderr)
