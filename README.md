@@ -28,3 +28,5 @@ Command:
 Output:
 
 ![graphviz-3](https://github.com/user-attachments/assets/ae557668-a5ae-45d6-9ff0-e6e0014cab03)
+
+![Example2](./query_heatmap.svg)
