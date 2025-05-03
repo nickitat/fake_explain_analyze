@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
-import re
-import sys
-import subprocess
-import uuid
 import argparse
+import re
+import subprocess
+import sys
+import uuid
 
 
 def parse_arguments():
@@ -280,7 +280,7 @@ def read_tsv_data(tsv_content):
 
 def get_heatmap_color(elapsed_us, min_elapsed_us, max_elapsed_us):
     """
-    Generate a color ranging from white to red based on the elapsed time.
+    Generate a color ranging from white to deep orange based on the elapsed time.
 
     Args:
         elapsed_us: The time in microseconds
@@ -288,7 +288,7 @@ def get_heatmap_color(elapsed_us, min_elapsed_us, max_elapsed_us):
         max_elapsed_us: Maximum time across all processors
 
     Returns:
-        A hex color string (e.g., "#FFFFFF" for white, "#FF0000" for red)
+        A hex color string (e.g., "#FFFFFF" for white, "#FF8000" for deep orange)
     """
     # Prevent division by zero if all processors took the same time
     range_elapsed = max_elapsed_us - min_elapsed_us
@@ -298,13 +298,15 @@ def get_heatmap_color(elapsed_us, min_elapsed_us, max_elapsed_us):
         # Normalize the value between 0 and 1
         normalized = (elapsed_us - min_elapsed_us) / range_elapsed
 
-    # Convert to a color from white (#FFFFFF) to red (#FF0000)
-    # Green component goes from FF to 00
+    # Convert to a color from white (#FFFFFF) to deep orange (#FF8000)
+    # Red stays at FF
+    # Green component goes from FF to 80
     # Blue component goes from FF to 00
-    green_blue = int(255 * (1 - normalized))
+    green = int(255 - (normalized * 127))  # 255 to 128 (FF to 80)
+    blue = int(255 * (1 - normalized))  # 255 to 0   (FF to 00)
 
     # Format as hex color
-    color = f'"#FF{green_blue:02X}{green_blue:02X}"'
+    color = f'"#FF{green:02X}{blue:02X}"'
 
     return color
 
